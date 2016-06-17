@@ -36,16 +36,17 @@ module.exports = function(sails) {
         // String to be directly matched, string with glob patterns,
         // regular expression test, function
         // or an array of any number and mix of these types
-        ignored: []
+        ignored: [],
+        skipOrm: false
       }
     },
 
     configure: function() {
-      sails.config[this.configKey].active = 
+      sails.config[this.configKey].active =
         // If an explicit value for the "active" config option is set, use it
-        (typeof sails.config[this.configKey].active !== 'undefined') ? 
+        (typeof sails.config[this.configKey].active !== 'undefined') ?
           // Otherwise turn off in production environment, on for all others
-          sails.config[this.configKey].active : 
+          sails.config[this.configKey].active :
             (sails.config.environment != 'production');
     },
 
@@ -57,8 +58,15 @@ module.exports = function(sails) {
 
       var self = this;
 
+      /**
+       * @type {{dirs: Array}}
+       */
+      function config() {
+        return sails.config[self.configKey];
+      }
+
       // If the hook has been deactivated, or controllers is deactivated just return
-      if (!sails.config[this.configKey].active || !sails.hooks.controllers) {
+      if (!config().active || !sails.hooks.controllers) {
         sails.log.verbose("Autoreload hook deactivated.");
         return cb();
       }
@@ -67,15 +75,15 @@ module.exports = function(sails) {
       var chokidar = require('chokidar');
 
       // Watch both the controllers and models directories
-      var watcher = chokidar.watch(sails.config[this.configKey].dirs, {
+      var watcher = chokidar.watch(config().dirs, {
         // Ignore the initial "add" events which are generated when Chokidar
         // starts watching files
         ignoreInitial: true,
-        usePolling: sails.config[this.configKey].usePolling,
-        ignored: sails.config[this.configKey].ignored
+        usePolling: config().usePolling,
+        ignored: config().ignored
       });
 
-      sails.log.verbose("Autoreload watching: ", sails.config[this.configKey].dirs);
+      sails.log.verbose("Autoreload watching: ", config().dirs);
 
       // Whenever something changes in those dirs, reload the ORM, controllers and blueprints.
       // Debounce the event handler so that it only fires after receiving all of the change
@@ -85,26 +93,24 @@ module.exports = function(sails) {
         sails.log.verbose("Detected API change -- reloading controllers / models...");
 
         // don't drop database
-        sails.config.models.migrate = sails.config[self.configKey].overrideMigrateSetting ? 'alter' : sails.config.models.migrate;
+        sails.config.models.migrate = config().overrideMigrateSetting ? 'alter' : sails.config.models.migrate;
 
-        //                    \│/  ╦ ╦╔═╗╦═╗╔╗╔╦╔╗╔╔═╗  \│/                  
+        //                    \│/  ╦ ╦╔═╗╦═╗╔╗╔╦╔╗╔╔═╗  \│/
         //  ─────────────────── ─  ║║║╠═╣╠╦╝║║║║║║║║ ╦  ─ ───────────────────
-        //                    /│\  ╚╩╝╩ ╩╩╚═╝╚╝╩╝╚╝╚═╝  /│\                  
+        //                    /│\  ╚╩╝╩ ╩╩╚═╝╚╝╩╝╚╝╚═╝  /│\
         //  ┬ ┬┌┐┌┌┬┐┌─┐┌─┐┬ ┬┌┬┐┌─┐┌┐┌┌┬┐┌─┐┌┬┐  ┌─┐┌─┐┬┌─┐  ┬┌┐┌  ┬ ┬┌─┐┌─┐
-        //  │ ││││ │││ ││  │ ││││├┤ │││ │ ├┤  ││  ├─┤├─┘│└─┐  ││││  │ │└─┐├┤ 
+        //  │ ││││ │││ ││  │ ││││├┤ │││ │ ├┤  ││  ├─┤├─┘│└─┐  ││││  │ │└─┐├┤
         //  └─┘┘└┘─┴┘└─┘└─┘└─┘┴ ┴└─┘┘└┘ ┴ └─┘─┴┘  ┴ ┴┴  ┴└─┘  ┴┘└┘  └─┘└─┘└─┘
         //  The loadAndRegisterControllers method is a _private_ method of the
         //  controllers hook, and should not be used in your app code.
         //  It will be replaced here as soon as a public "reload" method is added
         //  to the controllers hook.  But in the meantime it's okay because
         //  you're not using this in production, right?
-        //  
+        //
         //  Reload controller middleware
         sails.hooks.controllers.loadAndRegisterControllers(function() {
 
-          // Wait for the ORM to reload
-          sails.once('hook:orm:reloaded', function() {
-
+          function execute() {
             // Reload locales
             if (sails.hooks.i18n) {
               sails.hooks.i18n.initialize(function() {});
@@ -127,12 +133,17 @@ module.exports = function(sails) {
             if (sails.hooks.blueprints) {
               sails.hooks.blueprints.bindShadowRoutes();
             }
+          }
 
-          });
+          if (config().skipOrm) {
+            execute();
+          } else {
+            // Wait for the ORM to reload
+            sails.once('hook:orm:reloaded', execute);
 
-          // Reload ORM
-          sails.emit('hook:orm:reload');
-
+            // Reload ORM
+            sails.emit('hook:orm:reload');
+          }
         });
 
       }, 100));
@@ -140,7 +151,7 @@ module.exports = function(sails) {
       // We're done initializing.
       return cb();
 
-    },
+    }
 
   };
 
